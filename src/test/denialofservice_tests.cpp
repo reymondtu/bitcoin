@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2017 The Bitcoin Core developers
+// Copyright (c) 2011-2018 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -11,7 +11,7 @@
 #include <pow.h>
 #include <script/sign.h>
 #include <serialize.h>
-#include <util.h>
+#include <util/system.h>
 #include <validation.h>
 
 #include <test/test_bitcoin.h>
@@ -24,12 +24,15 @@
 extern bool AddOrphanTx(const CTransactionRef& tx, NodeId peer);
 extern void EraseOrphansFor(NodeId peer);
 extern unsigned int LimitOrphanTxSize(unsigned int nMaxOrphans);
+extern void Misbehaving(NodeId nodeid, int howmuch, const std::string& message="");
+
 struct COrphanTx {
     CTransactionRef tx;
     NodeId fromPeer;
     int64_t nTimeExpire;
 };
-extern std::map<uint256, COrphanTx> mapOrphanTransactions;
+extern CCriticalSection g_cs_orphans;
+extern std::map<uint256, COrphanTx> mapOrphanTransactions GUARDED_BY(g_cs_orphans);
 
 static CService ip(uint32_t i)
 {
@@ -54,7 +57,6 @@ BOOST_FIXTURE_TEST_SUITE(denialofservice_tests, TestingSetup)
 // work.
 BOOST_AUTO_TEST_CASE(outbound_slow_chain_eviction)
 {
-    std::atomic<bool> interruptDummy(false);
 
     // Mock an outbound peer
     CAddress addr1(ip(0xa0b0c001), NODE_NONE);
@@ -75,7 +77,7 @@ BOOST_AUTO_TEST_CASE(outbound_slow_chain_eviction)
     // Test starts here
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy); // should result in getheaders
+        peerLogic->SendMessages(&dummyNode1); // should result in getheaders
     }
     {
         LOCK2(cs_main, dummyNode1.cs_vSend);
@@ -88,7 +90,7 @@ BOOST_AUTO_TEST_CASE(outbound_slow_chain_eviction)
     SetMockTime(nStartTime+21*60);
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy); // should result in getheaders
+        peerLogic->SendMessages(&dummyNode1); // should result in getheaders
     }
     {
         LOCK2(cs_main, dummyNode1.cs_vSend);
@@ -98,7 +100,7 @@ BOOST_AUTO_TEST_CASE(outbound_slow_chain_eviction)
     SetMockTime(nStartTime+24*60);
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy); // should result in disconnect
+        peerLogic->SendMessages(&dummyNode1); // should result in disconnect
     }
     BOOST_CHECK(dummyNode1.fDisconnect == true);
     SetMockTime(0);
@@ -192,7 +194,6 @@ BOOST_AUTO_TEST_CASE(stale_tip_peer_management)
 
 BOOST_AUTO_TEST_CASE(DoS_banning)
 {
-    std::atomic<bool> interruptDummy(false);
 
     connman->ClearBanned();
     CAddress addr1(ip(0xa0b0c001), NODE_NONE);
@@ -207,7 +208,7 @@ BOOST_AUTO_TEST_CASE(DoS_banning)
     }
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy);
+        peerLogic->SendMessages(&dummyNode1);
     }
     BOOST_CHECK(connman->IsBanned(addr1));
     BOOST_CHECK(!connman->IsBanned(ip(0xa0b0c001|0x0000ff00))); // Different IP, not banned
@@ -224,7 +225,7 @@ BOOST_AUTO_TEST_CASE(DoS_banning)
     }
     {
         LOCK2(cs_main, dummyNode2.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode2, interruptDummy);
+        peerLogic->SendMessages(&dummyNode2);
     }
     BOOST_CHECK(!connman->IsBanned(addr2)); // 2 not banned yet...
     BOOST_CHECK(connman->IsBanned(addr1));  // ... but 1 still should be
@@ -234,7 +235,7 @@ BOOST_AUTO_TEST_CASE(DoS_banning)
     }
     {
         LOCK2(cs_main, dummyNode2.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode2, interruptDummy);
+        peerLogic->SendMessages(&dummyNode2);
     }
     BOOST_CHECK(connman->IsBanned(addr2));
 
@@ -245,7 +246,6 @@ BOOST_AUTO_TEST_CASE(DoS_banning)
 
 BOOST_AUTO_TEST_CASE(DoS_banscore)
 {
-    std::atomic<bool> interruptDummy(false);
 
     connman->ClearBanned();
     gArgs.ForceSetArg("-banscore", "111"); // because 11 is my favorite number
@@ -261,7 +261,7 @@ BOOST_AUTO_TEST_CASE(DoS_banscore)
     }
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy);
+        peerLogic->SendMessages(&dummyNode1);
     }
     BOOST_CHECK(!connman->IsBanned(addr1));
     {
@@ -270,7 +270,7 @@ BOOST_AUTO_TEST_CASE(DoS_banscore)
     }
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy);
+        peerLogic->SendMessages(&dummyNode1);
     }
     BOOST_CHECK(!connman->IsBanned(addr1));
     {
@@ -279,7 +279,7 @@ BOOST_AUTO_TEST_CASE(DoS_banscore)
     }
     {
         LOCK2(cs_main, dummyNode1.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode1, interruptDummy);
+        peerLogic->SendMessages(&dummyNode1);
     }
     BOOST_CHECK(connman->IsBanned(addr1));
     gArgs.ForceSetArg("-banscore", std::to_string(DEFAULT_BANSCORE_THRESHOLD));
@@ -290,7 +290,6 @@ BOOST_AUTO_TEST_CASE(DoS_banscore)
 
 BOOST_AUTO_TEST_CASE(DoS_bantime)
 {
-    std::atomic<bool> interruptDummy(false);
 
     connman->ClearBanned();
     int64_t nStartTime = GetTime();
@@ -309,7 +308,7 @@ BOOST_AUTO_TEST_CASE(DoS_bantime)
     }
     {
         LOCK2(cs_main, dummyNode.cs_sendProcessing);
-        peerLogic->SendMessages(&dummyNode, interruptDummy);
+        peerLogic->SendMessages(&dummyNode);
     }
     BOOST_CHECK(connman->IsBanned(addr));
 
@@ -326,7 +325,7 @@ BOOST_AUTO_TEST_CASE(DoS_bantime)
 static CTransactionRef RandomOrphan()
 {
     std::map<uint256, COrphanTx>::iterator it;
-    LOCK(cs_main);
+    LOCK2(cs_main, g_cs_orphans);
     it = mapOrphanTransactions.lower_bound(InsecureRand256());
     if (it == mapOrphanTransactions.end())
         it = mapOrphanTransactions.begin();
@@ -396,7 +395,7 @@ BOOST_AUTO_TEST_CASE(DoS_mapOrphans)
         BOOST_CHECK(!AddOrphanTx(MakeTransactionRef(tx), i));
     }
 
-    LOCK(cs_main);
+    LOCK2(cs_main, g_cs_orphans);
     // Test EraseOrphansFor:
     for (NodeId i = 0; i < 3; i++)
     {

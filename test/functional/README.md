@@ -28,6 +28,7 @@ don't have test cases for.
 - When subclassing the BitcoinTestFramwork, place overrides for the
   `set_test_params()`, `add_options()` and `setup_xxxx()` methods at the top of
   the subclass, then locally-defined helper methods, then the `run_test()` method.
+- Use `'{}'.format(x)` for string formatting, not `'%s' % x`.
 
 #### Naming guidelines
 
@@ -59,6 +60,11 @@ don't have test cases for.
 - When calling RPCs with lots of arguments, consider using named keyword
   arguments instead of positional arguments to make the intent of the call
   clear to readers.
+- Many of the core test framework classes such as `CBlock` and `CTransaction`
+  don't allow new attributes to be added to their objects at runtime like
+  typical Python objects allow. This helps prevent unpredictable side effects
+  from typographical errors or usage of the objects outside of their intended
+  purpose.
 
 #### RPC and P2P definitions
 
@@ -71,7 +77,7 @@ P2P messages. These can be found in the following source files:
 
 #### Using the P2P interface
 
-- `mininode.py` contains all the definitions for objects that pass
+- `messages.py` contains all the definitions for objects that pass
 over the network (`CBlock`, `CTransaction`, etc, along with the network-level
 wrappers for them, `msg_block`, `msg_tx`, etc).
 
